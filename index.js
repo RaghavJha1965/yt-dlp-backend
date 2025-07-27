@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 5000;
 
 // Rate limiting - simple in-memory store
 const requestCounts = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 5; // Reduced to be more conservative
+const RATE_LIMIT_WINDOW = 120000; // 2 minutes (increased)
+const MAX_REQUESTS_PER_WINDOW = 3; // Reduced further for cloud hosting
 
 const checkRateLimit = (ip) => {
     const now = Date.now();
@@ -195,83 +195,145 @@ app.get('/download', async (req, res) => {
         });
     }
 
-    const downloadOptions = {
-        output: filename,
-        // Simplified but effective anti-detection
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        referer: 'https://www.youtube.com/',
-        // Minimal but effective headers
-        addHeader: [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language: en-US,en;q=0.5',
-            'Accept-Encoding: gzip, deflate',
-            'Connection: keep-alive'
-        ],
-        // Add cookies if available
-        ...(getCookieString() && { cookies: getCookieString() }),
-        // Conservative retry settings
-        retries: 2,
-        fragmentRetries: 2,
-        // Add delays
-        sleepInterval: 2,
-        maxSleepInterval: 4
-    };
+    // Try multiple download strategies
+    const downloadStrategies = [
+        // Strategy 1: Standard approach
+        {
+            name: 'Standard',
+            options: {
+                output: filename,
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                referer: 'https://www.youtube.com/',
+                addHeader: [
+                    'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language: en-US,en;q=0.5',
+                    'Accept-Encoding: gzip, deflate',
+                    'Connection: keep-alive'
+                ],
+                ...(getCookieString() && { cookies: getCookieString() }),
+                retries: 1,
+                fragmentRetries: 1,
+                sleepInterval: 3,
+                maxSleepInterval: 5
+            }
+        },
+        // Strategy 2: Minimal approach
+        {
+            name: 'Minimal',
+            options: {
+                output: filename,
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                retries: 0,
+                noCheckCertificates: true,
+                noWarnings: true
+            }
+        },
+        // Strategy 3: Mobile approach
+        {
+            name: 'Mobile',
+            options: {
+                output: filename,
+                userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 14_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.2 Mobile/15E148 Safari/604.1',
+                referer: 'https://m.youtube.com/',
+                addHeader: [
+                    'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language: en-US,en;q=0.5',
+                    'Accept-Encoding: gzip, deflate',
+                    'Connection: keep-alive'
+                ],
+                retries: 1,
+                sleepInterval: 2
+            }
+        }
+    ];
 
     if (type === 'mp3') {
-        downloadOptions.extractAudio = true;
-        downloadOptions.audioFormat = 'mp3';
-        downloadOptions.audioQuality = '192K';
+        downloadStrategies.forEach(strategy => {
+            strategy.options.extractAudio = true;
+            strategy.options.audioFormat = 'mp3';
+            strategy.options.audioQuality = '192K';
+        });
     } else {
-        // Try multiple format options
-        downloadOptions.format = 'best[height<=720]/best[ext=mp4]/best';
+        downloadStrategies.forEach(strategy => {
+            strategy.options.format = 'best[height<=720]/best[ext=mp4]/best';
+        });
     }
 
-    try {
-        await ytdlp(`https://www.youtube.com/watch?v=${id}`, downloadOptions);
-
-        // Verify file was created
-        if (!fs.existsSync(filepath)) {
-            throw new Error('File was not created after download');
-        }
-
-        const contentType = type === 'mp3' ? 'audio/mpeg' : 'video/mp4';
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-
-        res.download(filepath, err => {
-            if (err) {
-                console.error('File download error:', err);
-                return;
-            }
-
-            // ⏱️ Delete file after 10 seconds
-            setTimeout(() => {
-                fs.unlink(filepath, err => {
-                    if (err) console.error(`Error deleting ${filename}:`, err);
-                    else console.log(`✅ Cleaned up: ${filename}`);
-                });
-            }, 10_000);
-        });
-    } catch (err) {
-        console.error('Download error:', err.message || err);
+    // Try each strategy
+    for (let i = 0; i < downloadStrategies.length; i++) {
+        const strategy = downloadStrategies[i];
         
-        // Handle specific YouTube errors
-        if (err.message && err.message.includes('429')) {
-            res.status(429).json({ error: 'YouTube rate limit exceeded. Please try again later.' });
-        } else if (err.message && err.message.includes('Sign in to confirm')) {
-            res.status(503).json({ error: 'YouTube requires authentication. Please try again later.' });
-        } else {
-            res.status(500).json({ error: 'Download failed' });
-        }
-        
-        // Clean up partial file if it exists
         try {
-            if (fs.existsSync(filepath)) {
-                fs.unlinkSync(filepath);
-                console.log(`🧹 Cleaned up partial file: ${filename}`);
+            console.log(`Trying download strategy ${i + 1}: ${strategy.name}`);
+            
+            await ytdlp(`https://www.youtube.com/watch?v=${id}`, strategy.options);
+
+            // Verify file was created
+            if (!fs.existsSync(filepath)) {
+                throw new Error('File was not created after download');
             }
-        } catch (cleanupErr) {
-            console.error('Failed to clean up partial file:', cleanupErr);
+
+            console.log(`✅ Download successful with strategy: ${strategy.name}`);
+
+            const contentType = type === 'mp3' ? 'audio/mpeg' : 'video/mp4';
+            res.setHeader('Content-Type', contentType);
+            res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+            res.download(filepath, err => {
+                if (err) {
+                    console.error('File download error:', err);
+                    return;
+                }
+
+                // ⏱️ Delete file after 10 seconds
+                setTimeout(() => {
+                    fs.unlink(filepath, err => {
+                        if (err) console.error(`Error deleting ${filename}:`, err);
+                        else console.log(`✅ Cleaned up: ${filename}`);
+                    });
+                }, 10_000);
+            });
+
+            return; // Success, exit the function
+
+        } catch (err) {
+            console.error(`Strategy ${strategy.name} failed:`, err.message);
+            
+            // Clean up partial file if it exists
+            try {
+                if (fs.existsSync(filepath)) {
+                    fs.unlinkSync(filepath);
+                    console.log(`🧹 Cleaned up partial file from ${strategy.name}: ${filename}`);
+                }
+            } catch (cleanupErr) {
+                console.error('Failed to clean up partial file:', cleanupErr);
+            }
+
+            // If this is the last strategy, return error
+            if (i === downloadStrategies.length - 1) {
+                console.error('All download strategies failed');
+                
+                // Handle specific YouTube errors
+                if (err.message && err.message.includes('429')) {
+                    res.status(429).json({ 
+                        error: 'YouTube rate limit exceeded. Please try again later.',
+                        note: 'This is common with cloud hosting. Consider using a VPN or proxy.'
+                    });
+                } else if (err.message && err.message.includes('Sign in to confirm')) {
+                    res.status(503).json({ 
+                        error: 'YouTube requires authentication. Please try again later.',
+                        note: 'Add valid YouTube cookies to improve success rate.'
+                    });
+                } else {
+                    res.status(500).json({ 
+                        error: 'Download failed - YouTube may be blocking cloud server requests',
+                        note: 'This is a known issue with cloud hosting providers.'
+                    });
+                }
+            } else {
+                // Wait before trying next strategy
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
         }
     }
 });
@@ -281,8 +343,42 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
-        endpoints: ['/search', '/download', '/health'],
+        endpoints: ['/search', '/download', '/health', '/status'],
         note: 'YouTube cookies may need to be updated periodically'
+    });
+});
+
+// Status endpoint with more details
+app.get('/status', (req, res) => {
+    const activeRequests = Array.from(requestCounts.values()).reduce((sum, requests) => sum + requests.length, 0);
+    
+    res.json({
+        status: 'OK',
+        timestamp: new Date().toISOString(),
+        server: {
+            nodeVersion: process.version,
+            platform: process.platform,
+            memory: {
+                used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + ' MB',
+                total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + ' MB'
+            },
+            uptime: Math.round(process.uptime()) + ' seconds'
+        },
+        rateLimiting: {
+            activeRequests,
+            maxRequestsPerWindow: MAX_REQUESTS_PER_WINDOW,
+            windowSize: RATE_LIMIT_WINDOW / 1000 + ' seconds'
+        },
+        youtube: {
+            cookiesConfigured: getCookieString() ? true : false,
+            note: 'Cloud hosting IPs are often blocked by YouTube. Consider using a proxy or VPN.'
+        },
+        endpoints: {
+            search: 'GET /search?q=<query>',
+            download: 'GET /download?id=<video_id>&type=<mp3|mp4>',
+            health: 'GET /health',
+            status: 'GET /status'
+        }
     });
 });
 
