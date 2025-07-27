@@ -66,6 +66,24 @@ const getCookieString = () => {
     return validCookies.length > 0 ? validCookies.join('; ') : null;
 };
 
+// Create cookies file for yt-dlp
+const createCookiesFile = () => {
+    const validCookies = Object.entries(YOUTUBE_COOKIES)
+        .filter(([key, value]) => value && value !== '');
+    
+    if (validCookies.length === 0) {
+        return null;
+    }
+    
+    const cookiesContent = validCookies
+        .map(([key, value]) => `youtube.com\tTRUE\t/\tTRUE\t1735689600\t${key}\t${value}`)
+        .join('\n');
+    
+    const cookiesFile = path.join(__dirname, 'cookies.txt');
+    fs.writeFileSync(cookiesFile, cookiesContent);
+    return cookiesFile;
+};
+
 // 🔍 Search YouTube
 app.get('/search', async (req, res) => {
     const query = req.query.q;
@@ -197,9 +215,9 @@ app.get('/download', async (req, res) => {
 
     // Try multiple download strategies
     const downloadStrategies = [
-        // Strategy 1: Standard approach
+        // Strategy 1: Standard approach with cookies file
         {
-            name: 'Standard',
+            name: 'Standard with Cookies',
             options: {
                 output: filename,
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -210,7 +228,6 @@ app.get('/download', async (req, res) => {
                     'Accept-Encoding: gzip, deflate',
                     'Connection: keep-alive'
                 ],
-                ...(getCookieString() && { cookies: getCookieString() }),
                 retries: 1,
                 fragmentRetries: 1,
                 sleepInterval: 3,
@@ -244,8 +261,32 @@ app.get('/download', async (req, res) => {
                 retries: 1,
                 sleepInterval: 2
             }
+        },
+        // Strategy 4: Invidious approach (alternative frontend)
+        {
+            name: 'Invidious',
+            options: {
+                output: filename,
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                referer: 'https://invidious.projectsegfau.lt/',
+                addHeader: [
+                    'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language: en-US,en;q=0.5',
+                    'Accept-Encoding: gzip, deflate',
+                    'Connection: keep-alive'
+                ],
+                retries: 1,
+                sleepInterval: 2
+            }
         }
     ];
+
+    // Add cookies file to strategies that might benefit from it
+    const cookiesFile = createCookiesFile();
+    if (cookiesFile) {
+        downloadStrategies[0].options.cookies = cookiesFile; // Standard strategy
+        downloadStrategies[3].options.cookies = cookiesFile; // Invidious strategy
+    }
 
     if (type === 'mp3') {
         downloadStrategies.forEach(strategy => {
@@ -274,6 +315,12 @@ app.get('/download', async (req, res) => {
             }
 
             console.log(`✅ Download successful with strategy: ${strategy.name}`);
+
+            // Clean up cookies file if it exists
+            const cookiesFile = path.join(__dirname, 'cookies.txt');
+            if (fs.existsSync(cookiesFile)) {
+                fs.unlinkSync(cookiesFile);
+            }
 
             const contentType = type === 'mp3' ? 'audio/mpeg' : 'video/mp4';
             res.setHeader('Content-Type', contentType);
@@ -313,21 +360,45 @@ app.get('/download', async (req, res) => {
             if (i === downloadStrategies.length - 1) {
                 console.error('All download strategies failed');
                 
+                // Clean up cookies file if it exists
+                const cookiesFile = path.join(__dirname, 'cookies.txt');
+                if (fs.existsSync(cookiesFile)) {
+                    fs.unlinkSync(cookiesFile);
+                }
+                
                 // Handle specific YouTube errors
                 if (err.message && err.message.includes('429')) {
                     res.status(429).json({ 
                         error: 'YouTube rate limit exceeded. Please try again later.',
-                        note: 'This is common with cloud hosting. Consider using a VPN or proxy.'
+                        note: 'This is common with cloud hosting. Consider using a VPN or proxy.',
+                        solutions: [
+                            'Add valid YouTube cookies via environment variables',
+                            'Use a different hosting provider',
+                            'Implement proxy rotation',
+                            'Wait 2-3 minutes before retrying'
+                        ]
                     });
                 } else if (err.message && err.message.includes('Sign in to confirm')) {
                     res.status(503).json({ 
                         error: 'YouTube requires authentication. Please try again later.',
-                        note: 'Add valid YouTube cookies to improve success rate.'
+                        note: 'Add valid YouTube cookies to improve success rate.',
+                        solutions: [
+                            'Set YT_LOGIN_INFO, YT_SID, YT_HSID environment variables',
+                            'Update cookies periodically (they expire)',
+                            'Use a residential IP address',
+                            'Consider using a different service'
+                        ]
                     });
                 } else {
                     res.status(500).json({ 
                         error: 'Download failed - YouTube may be blocking cloud server requests',
-                        note: 'This is a known issue with cloud hosting providers.'
+                        note: 'This is a known issue with cloud hosting providers.',
+                        solutions: [
+                            'Add YouTube cookies via environment variables',
+                            'Use a VPN or proxy service',
+                            'Host on a residential IP address',
+                            'Consider alternative video sources'
+                        ]
                     });
                 }
             } else {
