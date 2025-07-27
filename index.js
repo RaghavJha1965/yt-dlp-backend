@@ -15,7 +15,7 @@ app.get('/search', async (req, res) => {
     if (!query) return res.status(400).json({ error: 'Missing query' });
 
     try {
-        const { stdout } = await ytdlp(`ytsearch10:${query}`, {
+        const stdout = await ytdlp(`ytsearch10:${query}`, {
             dumpSingleJson: false,
             flatPlaylist: true,
             print: "%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s"
