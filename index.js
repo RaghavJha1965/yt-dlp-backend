@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 5000;
 // Rate limiting - simple in-memory store
 const requestCounts = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const MAX_REQUESTS_PER_WINDOW = 10;
+const MAX_REQUESTS_PER_WINDOW = 5; // Reduced to be more conservative
 
 const checkRateLimit = (ip) => {
     const now = Date.now();
@@ -43,6 +43,29 @@ const validateQuery = (query) => {
     return query && query.trim().length > 0 && query.trim().length <= 100;
 };
 
+// YouTube cookies (you'll need to update these periodically)
+// For production, use environment variables instead of hardcoding
+const YOUTUBE_COOKIES = {
+    'CONSENT': process.env.YT_CONSENT || 'YES+cb.20231231-07-p0.en+FX+{}',
+    'LOGIN_INFO': process.env.YT_LOGIN_INFO || '',
+    'SID': process.env.YT_SID || '',
+    'HSID': process.env.YT_HSID || '',
+    'SSID': process.env.YT_SSID || '',
+    'APISID': process.env.YT_APISID || '',
+    'SAPISID': process.env.YT_SAPISID || '',
+    '__Secure-1PSID': process.env.YT_SECURE_1PSID || '',
+    '__Secure-3PSID': process.env.YT_SECURE_3PSID || ''
+};
+
+// Convert cookies object to string format
+const getCookieString = () => {
+    const validCookies = Object.entries(YOUTUBE_COOKIES)
+        .filter(([key, value]) => value && value !== '')
+        .map(([key, value]) => `${key}=${value}`);
+    
+    return validCookies.length > 0 ? validCookies.join('; ') : null;
+};
+
 // 🔍 Search YouTube
 app.get('/search', async (req, res) => {
     const query = req.query.q;
@@ -57,27 +80,44 @@ app.get('/search', async (req, res) => {
     }
 
     try {
-        const stdout = await ytdlp(`ytsearch10:${query}`, {
+        const searchOptions = {
             flatPlaylist: true,
             print: '%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s',
-            // Add browser-like headers to avoid bot detection
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            // Enhanced anti-detection
+            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             referer: 'https://www.youtube.com/',
             addHeader: [
-                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language: en-US,en;q=0.5',
-                'Accept-Encoding: gzip, deflate',
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language: en-US,en;q=0.9',
+                'Accept-Encoding: gzip, deflate, br',
                 'DNT: 1',
                 'Connection: keep-alive',
-                'Upgrade-Insecure-Requests: 1'
-            ]
-        });
+                'Sec-Fetch-Dest: document',
+                'Sec-Fetch-Mode: navigate',
+                'Sec-Fetch-Site: none',
+                'Sec-Fetch-User: ?1',
+                'Upgrade-Insecure-Requests: 1',
+                'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                'sec-ch-ua-mobile: ?0',
+                'sec-ch-ua-platform: "macOS"'
+            ],
+            // Add cookies if available
+            ...(getCookieString() && { cookies: getCookieString() }),
+            // Add delays and retries
+            retries: 2,
+            sleepInterval: 3,
+            maxSleepInterval: 6,
+            // Use different extractor
+            extractorArgs: 'youtube:player_client=android'
+        };
+
+        const stdout = await ytdlp(`ytsearch10:${query}`, searchOptions);
 
         const lines = stdout.trim().split('\n');
         const results = lines.map(line => {
             const [id, title, duration, thumbnail] = line.split('|');
             return { id, title, duration, thumbnail };
-        }).filter(result => result.id && result.title); // Filter invalid results
+        }).filter(result => result.id && result.title);
 
         res.json(results);
     } catch (err) {
@@ -127,30 +167,43 @@ app.get('/download', async (req, res) => {
 
     const downloadOptions = {
         output: filename,
-        // Add browser-like headers to avoid bot detection
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        // Enhanced anti-detection
+        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         referer: 'https://www.youtube.com/',
         addHeader: [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language: en-US,en;q=0.5',
-            'Accept-Encoding: gzip, deflate',
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language: en-US,en;q=0.9',
+            'Accept-Encoding: gzip, deflate, br',
             'DNT: 1',
             'Connection: keep-alive',
-            'Upgrade-Insecure-Requests: 1'
+            'Sec-Fetch-Dest: document',
+            'Sec-Fetch-Mode: navigate',
+            'Sec-Fetch-Site: none',
+            'Sec-Fetch-User: ?1',
+            'Upgrade-Insecure-Requests: 1',
+            'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+            'sec-ch-ua-mobile: ?0',
+            'sec-ch-ua-platform: "macOS"'
         ],
-        // Add retry logic
+        // Add cookies if available
+        ...(getCookieString() && { cookies: getCookieString() }),
+        // Enhanced retry logic
         retries: 3,
         fragmentRetries: 3,
-        // Add delay between requests
-        sleepInterval: 2,
-        maxSleepInterval: 5
+        // Add delays
+        sleepInterval: 3,
+        maxSleepInterval: 6,
+        // Use different extractor
+        extractorArgs: 'youtube:player_client=android'
     };
 
     if (type === 'mp3') {
         downloadOptions.extractAudio = true;
         downloadOptions.audioFormat = 'mp3';
+        downloadOptions.audioQuality = '192K';
     } else {
-        downloadOptions.format = 'best[ext=mp4]/best'; // Simplified format to avoid issues
+        // Try multiple format options
+        downloadOptions.format = 'best[height<=720]/best[ext=mp4]/best';
     }
 
     try {
@@ -208,7 +261,8 @@ app.get('/health', (req, res) => {
     res.json({ 
         status: 'OK', 
         timestamp: new Date().toISOString(),
-        endpoints: ['/search', '/download', '/health']
+        endpoints: ['/search', '/download', '/health'],
+        note: 'YouTube cookies may need to be updated periodically'
     });
 });
 
@@ -225,4 +279,5 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
     console.log(`🚀 yt-dlp backend running at http://localhost:${PORT}`);
+    console.log(`⚠️  Note: YouTube cookies may need to be updated for optimal performance`);
 });
