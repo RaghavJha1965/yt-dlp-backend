@@ -1,5 +1,5 @@
 const express = require('express');
-const { exec } = require('child_process');
+const ytdlp = require('yt-dlp-exec');
 const path = require('path');
 const fs = require('fs');
 const cors = require('cors');
@@ -7,30 +7,35 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 // 🔍 Search YouTube
-app.get('/search', (req, res) => {
+app.get('/search', async (req, res) => {
     const query = req.query.q;
     if (!query) return res.status(400).json({ error: 'Missing query' });
 
-    exec(`yt-dlp "ytsearch10:${query}" --print "%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s"`, (err, stdout, stderr) => {
-        if (err) return res.status(500).json({ error: stderr });
+    try {
+        const { stdout } = await ytdlp(`ytsearch10:${query}`, {
+            dumpSingleJson: false,
+            flatPlaylist: true,
+            print: "%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s"
+        });
 
-        const results = stdout
-            .trim()
-            .split('\n')
-            .map(line => {
-                const [id, title, duration, thumbnail] = line.split('|');
-                return { id, title, duration, thumbnail };
-            });
+        const lines = stdout.trim().split('\n');
+        const results = lines.map(line => {
+            const [id, title, duration, thumbnail] = line.split('|');
+            return { id, title, duration, thumbnail };
+        });
 
         res.json(results);
-    });
+    } catch (err) {
+        console.error("Search error:", err);
+        res.status(500).json({ error: "Search failed" });
+    }
 });
 
 // ⬇️ Download video/audio
-app.get('/download', (req, res) => {
+app.get('/download', async (req, res) => {
     const { id, type } = req.query;
     if (!id || !['mp3', 'mp4'].includes(type)) {
         return res.status(400).json({ error: 'Missing or invalid parameters' });
@@ -44,18 +49,21 @@ app.get('/download', (req, res) => {
         return res.download(filepath);
     }
 
-    const format = type === 'mp3' ? 'bestaudio' : 'best';
-    const ext = type;
+    try {
+        await ytdlp(`https://www.youtube.com/watch?v=${id}`, {
+            format: type === 'mp3' ? 'bestaudio' : 'best',
+            extractAudio: type === 'mp3',
+            audioFormat: type === 'mp3' ? 'mp3' : undefined,
+            output: filename
+        });
 
-    const cmd = `yt-dlp -f ${format} --extract-audio --audio-format ${type} -o "${filename}" https://www.youtube.com/watch?v=${id}`;
-
-    exec(cmd, (err) => {
-        if (err) return res.status(500).json({ error: 'Download failed' });
         res.download(filepath, () => {
-            // Optional: delete file after sending
             setTimeout(() => fs.unlinkSync(filepath), 10000);
         });
-    });
+    } catch (err) {
+        console.error("Download error:", err);
+        res.status(500).json({ error: "Download failed" });
+    }
 });
 
 app.listen(PORT, () => console.log(`Backend running at http://localhost:${PORT}`));
