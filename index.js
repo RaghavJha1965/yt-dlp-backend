@@ -132,8 +132,8 @@ app.get('/health', (req, res) => {
     });
 });
 
-// 404 handler
-app.use('*', (req, res) => {
+// 404 handler - catch all unmatched routes
+app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
 });
 
