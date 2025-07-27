@@ -16,9 +16,8 @@ app.get('/search', async (req, res) => {
 
     try {
         const stdout = await ytdlp(`ytsearch10:${query}`, {
-            dumpSingleJson: false,
             flatPlaylist: true,
-            print: "%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s"
+            print: '%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s'
         });
 
         const lines = stdout.trim().split('\n');
@@ -33,6 +32,7 @@ app.get('/search', async (req, res) => {
         res.status(500).json({ error: "Search failed" });
     }
 });
+
 
 // ⬇️ Download video/audio
 app.get('/download', async (req, res) => {
