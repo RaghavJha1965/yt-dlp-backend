@@ -79,36 +79,26 @@ app.get('/search', async (req, res) => {
         return res.status(429).json({ error: 'Rate limit exceeded. Please try again later.' });
     }
 
+    // Try primary search method
     try {
         const searchOptions = {
             flatPlaylist: true,
             print: '%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s',
-            // Enhanced anti-detection
-            userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            // Simplified but effective anti-detection
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             referer: 'https://www.youtube.com/',
+            // Minimal but effective headers
             addHeader: [
-                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language: en-US,en;q=0.9',
-                'Accept-Encoding: gzip, deflate, br',
-                'DNT: 1',
-                'Connection: keep-alive',
-                'Sec-Fetch-Dest: document',
-                'Sec-Fetch-Mode: navigate',
-                'Sec-Fetch-Site: none',
-                'Sec-Fetch-User: ?1',
-                'Upgrade-Insecure-Requests: 1',
-                'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-                'sec-ch-ua-mobile: ?0',
-                'sec-ch-ua-platform: "macOS"'
+                'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language: en-US,en;q=0.5',
+                'Accept-Encoding: gzip, deflate',
+                'Connection: keep-alive'
             ],
             // Add cookies if available
             ...(getCookieString() && { cookies: getCookieString() }),
-            // Add delays and retries
-            retries: 2,
-            sleepInterval: 3,
-            maxSleepInterval: 6,
-            // Use different extractor
-            extractorArgs: 'youtube:player_client=android'
+            // Conservative retry settings
+            retries: 1,
+            sleepInterval: 2
         };
 
         const stdout = await ytdlp(`ytsearch10:${query}`, searchOptions);
@@ -119,17 +109,57 @@ app.get('/search', async (req, res) => {
             return { id, title, duration, thumbnail };
         }).filter(result => result.id && result.title);
 
-        res.json(results);
+        if (results.length > 0) {
+            return res.json(results);
+        }
+
+        // If no results, try fallback method
+        throw new Error('No results found, trying fallback');
+
     } catch (err) {
-        console.error('Search error:', err.message || err);
+        console.error('Primary search failed:', err.message);
         
-        // Handle specific YouTube errors
-        if (err.message && err.message.includes('429')) {
-            res.status(429).json({ error: 'YouTube rate limit exceeded. Please try again later.' });
-        } else if (err.message && err.message.includes('Sign in to confirm')) {
-            res.status(503).json({ error: 'YouTube requires authentication. Please try again later.' });
-        } else {
-            res.status(500).json({ error: 'Search failed' });
+        // Try fallback search method
+        try {
+            console.log('Trying fallback search method...');
+            
+            const fallbackOptions = {
+                flatPlaylist: true,
+                print: '%(id)s|%(title)s|%(duration_string)s|%(thumbnail)s',
+                // Even simpler options
+                userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                // No additional headers
+                retries: 0,
+                noCheckCertificates: true
+            };
+
+            const stdout = await ytdlp(`ytsearch5:${query}`, fallbackOptions);
+
+            const lines = stdout.trim().split('\n');
+            const results = lines.map(line => {
+                const [id, title, duration, thumbnail] = line.split('|');
+                return { id, title, duration, thumbnail };
+            }).filter(result => result.id && result.title);
+
+            if (results.length > 0) {
+                return res.json(results);
+            }
+
+            throw new Error('Fallback search also failed');
+
+        } catch (fallbackErr) {
+            console.error('Fallback search failed:', fallbackErr.message);
+            
+            // Handle specific YouTube errors
+            if (err.message && err.message.includes('429')) {
+                res.status(429).json({ error: 'YouTube rate limit exceeded. Please try again later.' });
+            } else if (err.message && err.message.includes('Sign in to confirm')) {
+                res.status(503).json({ error: 'YouTube requires authentication. Please try again later.' });
+            } else if (err.message && err.message.includes('Failed to parse JSON')) {
+                res.status(503).json({ error: 'YouTube search temporarily unavailable. Please try again later.' });
+            } else {
+                res.status(500).json({ error: 'Search failed - YouTube may be blocking requests' });
+            }
         }
     }
 });
@@ -167,34 +197,24 @@ app.get('/download', async (req, res) => {
 
     const downloadOptions = {
         output: filename,
-        // Enhanced anti-detection
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        // Simplified but effective anti-detection
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         referer: 'https://www.youtube.com/',
+        // Minimal but effective headers
         addHeader: [
-            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language: en-US,en;q=0.9',
-            'Accept-Encoding: gzip, deflate, br',
-            'DNT: 1',
-            'Connection: keep-alive',
-            'Sec-Fetch-Dest: document',
-            'Sec-Fetch-Mode: navigate',
-            'Sec-Fetch-Site: none',
-            'Sec-Fetch-User: ?1',
-            'Upgrade-Insecure-Requests: 1',
-            'sec-ch-ua: "Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'sec-ch-ua-mobile: ?0',
-            'sec-ch-ua-platform: "macOS"'
+            'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language: en-US,en;q=0.5',
+            'Accept-Encoding: gzip, deflate',
+            'Connection: keep-alive'
         ],
         // Add cookies if available
         ...(getCookieString() && { cookies: getCookieString() }),
-        // Enhanced retry logic
-        retries: 3,
-        fragmentRetries: 3,
+        // Conservative retry settings
+        retries: 2,
+        fragmentRetries: 2,
         // Add delays
-        sleepInterval: 3,
-        maxSleepInterval: 6,
-        // Use different extractor
-        extractorArgs: 'youtube:player_client=android'
+        sleepInterval: 2,
+        maxSleepInterval: 4
     };
 
     if (type === 'mp3') {
